@@ -28,6 +28,29 @@ METRIC_NAMES = ("loss", "accuracy", "macro_f1", "balanced_accuracy", "quadratic_
                 "roc_auc_ovr_macro")
 
 
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0.0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_loss = float("inf")
+        self.reference_loss = float("inf")
+        self.bad_epochs = 0
+
+    def update(self, loss):
+        if not np.isfinite(loss):
+            raise ValueError(f"Validation loss должен быть конечным числом, получено {loss}")
+        is_best = loss < self.best_loss
+        if is_best:
+            self.best_loss = loss
+        # min_delta влияет на остановку; checkpoint всегда выбирается по минимуму loss.
+        if loss < self.reference_loss - self.min_delta:
+            self.reference_loss = loss
+            self.bad_epochs = 0
+        else:
+            self.bad_epochs += 1
+        return is_best, self.patience > 0 and self.bad_epochs >= self.patience
+
+
 def set_seed(seed, deterministic=False):
     if deterministic:
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -193,7 +216,11 @@ def main():
                         help="Общая папка ImageNet-весов; поиск также во вложенных папках")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--folds", type=int, default=5)
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=50, help="Максимум эпох на фолд; по умолчанию 50")
+    parser.add_argument("--patience", type=int, default=5,
+                        help="Эпох без улучшения validation loss до остановки; 0 — отключить")
+    parser.add_argument("--min-delta", type=float, default=0.0,
+                        help="Минимальное снижение validation loss для сброса patience")
     parser.add_argument("--batch-size", type=int, help="По умолчанию 256 на CUDA, 16 на CPU")
     parser.add_argument("--workers", type=int, help="Загрузка данных: до 8 на CUDA, 0 на CPU")
     parser.add_argument("--precision", choices=["bf16", "fp32"], default="bf16")
@@ -216,6 +243,8 @@ def main():
         parser.error("workers должен быть >= 0")
     if args.folds < 2 or args.epochs < 1 or args.batch_size < 1 or args.lr <= 0:
         parser.error("Нужны folds >= 2, epochs >= 1, batch-size >= 1 и lr > 0")
+    if args.patience < 0 or not np.isfinite(args.min_delta) or args.min_delta < 0:
+        parser.error("Нужны patience >= 0 и конечное min-delta >= 0")
     if not 0 <= args.seed < 2**32:
         parser.error("seed должен быть от 0 до 2**32 - 1")
     if not args.data.is_dir():
@@ -259,6 +288,8 @@ def main():
                       "random initialization")
     print(f"Weights: {weights.name if weights is not None else 'none'} | "
           f"Source: {weights_source}", flush=True)
+    print(f"Epoch limit: {args.epochs} | Early stopping: val_loss, "
+          f"patience={args.patience} (0 = disabled), min_delta={args.min_delta}", flush=True)
     print(f"Images: {len(train_data)} | Results: {output}", flush=True)
 
     # Один seed даёт одинаковые разбиения для сравнения двух моделей.
@@ -269,10 +300,11 @@ def main():
     oof_folds = np.zeros(len(train_data), dtype=int)
     with ((output / "metrics.csv").open("w", newline="", encoding="utf-8") as file,
           (output / "history.csv").open("w", newline="", encoding="utf-8") as history_file):
-        writer = csv.DictWriter(file, fieldnames=["fold", *METRIC_NAMES])
+        writer = csv.DictWriter(file, fieldnames=["fold", *METRIC_NAMES, "best_epoch", "epochs_run"])
         writer.writeheader()
         history = csv.DictWriter(history_file, fieldnames=[
-            "fold", "epoch", "train_loss", *[f"val_{name}" for name in METRIC_NAMES], "time_seconds"])
+            "fold", "epoch", "train_loss", *[f"val_{name}" for name in METRIC_NAMES],
+            "is_best", "time_seconds"])
         history.writeheader()
         for fold, (train_idx, val_idx) in enumerate(cv.split(targets, targets), start=1):
             fold_seed = (args.seed + fold - 1) % 2**32
@@ -293,6 +325,8 @@ def main():
                 device=device, memory_format=memory_format)
             optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, fused=use_cuda)
             criterion = nn.CrossEntropyLoss()
+            early_stopping = EarlyStopping(args.patience, args.min_delta)
+            best_epoch, best_metrics, best_probabilities = 0, None, None
 
             for epoch in range(1, args.epochs + 1):
                 started = time.perf_counter()
@@ -301,40 +335,54 @@ def main():
                     model, val_loader, criterion, device, use_bf16=use_bf16)
                 metrics, _, _ = classification_metrics(val_targets, probabilities, train_data.classes)
                 metrics = {"loss": val_loss, **metrics}
+                is_best, should_stop = early_stopping.update(val_loss)
+                if is_best:
+                    best_epoch = epoch
+                    best_metrics = {name: float(value) for name, value in metrics.items()}
+                    best_probabilities = probabilities.copy()
+                    # Сохраняем сразу: файл остаётся доступен и при прерывании обучения.
+                    torch.save({
+                        "model_state_dict": model.state_dict(),
+                        "model": args.model,
+                        "weights": args.weights,
+                        "classes": train_data.classes,
+                        "seed": args.seed,
+                        "fold": fold,
+                        "epochs": args.epochs,
+                        "best_epoch": best_epoch,
+                        "best_metrics": best_metrics,
+                        "patience": args.patience,
+                        "min_delta": args.min_delta,
+                        "batch_size": args.batch_size,
+                        "lr": args.lr,
+                        "folds": args.folds,
+                        "workers": args.workers,
+                        "precision": "bf16" if use_bf16 else "fp32",
+                        "deterministic": args.deterministic,
+                    }, output / f"fold_{fold}.pt")
                 elapsed = time.perf_counter() - started
                 history.writerow({"fold": fold, "epoch": epoch, "train_loss": train_loss,
                                   **{f"val_{name}": value for name, value in metrics.items()},
-                                  "time_seconds": elapsed})
+                                  "is_best": is_best, "time_seconds": elapsed})
                 history_file.flush()
                 print(f"Fold {fold}/{args.folds} | Epoch {epoch}/{args.epochs} | "
                       f"train_loss={train_loss:.4f} val_loss={val_loss:.4f} | "
                       + " ".join(f"{name}={metrics[name]:.4f}" for name in METRIC_NAMES[1:])
-                      + f" | time={elapsed:.1f}s", flush=True)
+                      + f" | best_epoch={best_epoch} time={elapsed:.1f}s", flush=True)
+                if should_stop:
+                    print(f"Fold {fold}: early stopping at epoch {epoch}; "
+                          f"best epoch={best_epoch}, val_loss={best_metrics['loss']:.4f}", flush=True)
+                    break
 
-            # Сравниваем последнюю эпоху при заранее заданном числе эпох.
-            scores.append([metrics[name] for name in METRIC_NAMES])
+            # Итог, OOF-предсказания и checkpoint относятся к одной лучшей эпохе.
+            scores.append([best_metrics[name] for name in METRIC_NAMES])
             fold_sizes.append(len(val_idx))
-            writer.writerow({"fold": fold, **metrics})
+            writer.writerow({"fold": fold, **best_metrics, "best_epoch": best_epoch, "epochs_run": epoch})
             file.flush()
             # val_loader не перемешивается: порядок предсказаний совпадает с val_idx.
-            oof_probabilities[val_idx] = probabilities
+            oof_probabilities[val_idx] = best_probabilities
             oof_folds[val_idx] = fold
-            save_evaluation(output, f"fold_{fold}", val_targets, probabilities, train_data.classes)
-            torch.save({
-                "model_state_dict": model.state_dict(),
-                "model": args.model,
-                "weights": args.weights,
-                "classes": train_data.classes,
-                "seed": args.seed,
-                "fold": fold,
-                "epochs": args.epochs,
-                "batch_size": args.batch_size,
-                "lr": args.lr,
-                "folds": args.folds,
-                "workers": args.workers,
-                "precision": "bf16" if use_bf16 else "fp32",
-                "deterministic": args.deterministic,
-            }, output / f"fold_{fold}.pt")
+            save_evaluation(output, f"fold_{fold}", targets[val_idx], best_probabilities, train_data.classes)
             del model, optimizer, train_loader, val_loader
 
         means, stds = np.mean(scores, axis=0), np.std(scores, axis=0)

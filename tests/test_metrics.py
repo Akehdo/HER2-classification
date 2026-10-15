@@ -125,10 +125,12 @@ class MetricsTests(unittest.TestCase):
                 targets, targets))
             for fold, (_, val_idx) in enumerate(splits, 1):
                 self.assertTrue(all(predictions[i]["fold"] == str(fold) for i in val_idx))
-                final_epoch = next(row for row in history if row["fold"] == str(fold)
-                                   and row["epoch"] == "2")
+                best_epoch = min((row for row in history if row["fold"] == str(fold)),
+                                 key=lambda row: float(row["val_loss"]))
+                self.assertEqual(int(summary[fold - 1]["best_epoch"]), int(best_epoch["epoch"]))
+                self.assertEqual(int(summary[fold - 1]["epochs_run"]), 2)
                 for name in main.METRIC_NAMES:
-                    self.assertEqual(float(summary[fold - 1][name]), float(final_epoch[f"val_{name}"]))
+                    self.assertEqual(float(summary[fold - 1][name]), float(best_epoch[f"val_{name}"]))
                 self.assertTrue((output / f"fold_{fold}.pt").is_file())
 
             for prefix in ["fold_1", "fold_2", "fold_3", "oof"]:

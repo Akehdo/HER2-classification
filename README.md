@@ -28,11 +28,13 @@ Patch-based-dataset/
 ## Запуск
 
 ```powershell
-.\.venv\Scripts\python.exe main.py --model resnet18 --weights IMAGENET1K_V1 --seed 42 --folds 5 --epochs 10
-.\.venv\Scripts\python.exe main.py --model resnet50 --weights IMAGENET1K_V1 --seed 42 --folds 5 --epochs 10
+.\.venv\Scripts\python.exe main.py --model resnet18 --seed 42
+.\.venv\Scripts\python.exe main.py --model resnet50 --seed 42
 ```
 
 Дополнительно можно менять `--batch-size`, `--workers`, `--lr 0.0001` и `--output runs`. Без явных настроек на CUDA выбираются batch size 256 и до 8 процессов загрузки, на CPU — batch size 16 и 0 процессов. Для небольшой GPU ноутбука задайте `--batch-size 8` или `16`.
+
+По умолчанию: 5 фолдов, максимум **50 эпох на фолд**, early stopping по validation loss с `--patience 5` и `--min-delta 0`. Счётчик сбрасывается, когда loss снижается более чем на `min_delta` относительно последнего значимого улучшения. После 5 эпох без такого улучшения фолд завершается. Параметры можно менять, например `--epochs 50 --patience 7 --min-delta 0.0001`. `--patience 0` отключает досрочную остановку, сохраняя выбор лучшей эпохи. При любом `min_delta` checkpoint выбирается по фактическому минимуму validation loss; равный loss не заменяет предыдущую лучшую эпоху.
 
 ## Сервер с одной H200
 
@@ -94,9 +96,9 @@ python main.py --model resnet50 --device cuda --precision bf16 --batch-size 256 
 - Каждый фолд начинает обучение заново с выбранных ImageNet-весов. Все слои обучаются.
 - В train используются случайные отражения после уменьшения изображения; в validation — только предобработка выбранных весов, включая ImageNet-нормализацию и crop 224 × 224.
 - Одинаковые `--seed`, данные и число фолдов дают одинаковые разбиения для обеих моделей. Seed также задаёт инициализацию, перемешивание и аугментации, включая процессы загрузки. Для строгой воспроизводимости используйте `--deterministic`; держите одинаковыми также workers, batch size, устройство и версии библиотек.
-- После каждой эпохи на validation считаются loss, accuracy, macro F1, balanced accuracy, quadratic weighted kappa и macro ROC-AUC one-vs-rest. Итог CV — среднее и стандартное отклонение метрик **последней эпохи** по фолдам.
+- После каждой эпохи на validation считаются loss, accuracy, macro F1, balanced accuracy, quadratic weighted kappa и macro ROC-AUC one-vs-rest. При снижении validation loss сразу сохраняются лучшие веса. Итог CV — среднее и стандартное отклонение метрик **лучшей эпохи по validation loss** каждого фолда. Счётчик early stopping начинает отсчёт заново в каждом фолде.
 - Balanced accuracy — среднее recall по классам. Quadratic weighted kappa учитывает расстояние между классами в порядке `ImageFolder`: для нашего датасета `class_0`, `class_1+`, `class_2+`, `class_3+`. Если использовать другие классы, этот порядок должен соответствовать их порядковой шкале.
-- Дополнительно собираются OOF (out-of-fold) предсказания: каждый патч оценивается один раз моделью своего validation-фолда, которая не обучалась на этом патче. По ним строятся общий отчёт и матрицы ошибок. OOF-метрики вычисляются по всем предсказаниям вместе и могут отличаться от среднего по фолдам; OOF loss — среднее fold loss с весами по размерам фолдов.
+- Дополнительно собираются OOF (out-of-fold) предсказания лучшей эпохи каждого фолда. Патчи validation не участвуют в обновлении весов, но их метки используются для выбора эпохи и early stopping. По этим предсказаниям строятся общий отчёт и матрицы ошибок. OOF-метрики вычисляются по всем предсказаниям вместе и могут отличаться от среднего по фолдам; OOF loss — среднее fold loss с весами по размерам фолдов. Для независимой итоговой оценки нужен отдельный test после фиксации настроек.
 
 В этом архиве имена вида `her2-0-score_test_1168.png` не содержат явного ID пациента/WSI. Поэтому здесь CV **по патчам**: код не гарантирует разделение по пациентам или стёклам. Для такой оценки потребуется таблица соответствия патчей пациентам/WSI. Разновидности исходного датасета описаны в [репозитории авторов](https://github.com/seraju77/HER2-IHC-40x-data-preprocessing).
 
@@ -104,14 +106,14 @@ python main.py --model resnet50 --device cuda --precision bf16 --batch-size 256 
 
 Например, `runs/resnet18_IMAGENET1K_V1_seed42/` содержит:
 
-- `metrics.csv` — `loss`, `accuracy`, `macro_f1`, `balanced_accuracy`, `quadratic_kappa`, `roc_auc_ovr_macro` последней эпохи каждого фолда, затем строки `mean`, `std` (по фолдам, `ddof=0`) и `oof`;
-- `history.csv` — train loss, все validation-метрики и время каждой эпохи с номерами фолда и эпохи;
+- `metrics.csv` — `loss`, `accuracy`, `macro_f1`, `balanced_accuracy`, `quadratic_kappa`, `roc_auc_ovr_macro` лучшей эпохи каждого фолда, её номер `best_epoch` и фактическое число эпох `epochs_run`; затем строки `mean`, `std` (по фолдам, `ddof=0`) и `oof`, где поля номеров эпох остаются пустыми;
+- `history.csv` — train loss, все validation-метрики и время каждой выполненной эпохи с номерами фолда и эпохи; `is_best` показывает, обновила ли эпоха лучший checkpoint;
 - `fold_1_classification_report.csv` … `fold_5_classification_report.csv` — precision, recall, F1, число примеров (`support`) и ROC-AUC one-vs-rest для каждого класса;
 - `fold_1_confusion_matrix.csv` / `.png` и аналогичные файлы остальных фолдов — матрицы ошибок: строки — истинные классы, столбцы — предсказанные;
 - `fold_1_confusion_matrix_normalized.csv` / `.png` и аналогичные файлы остальных фолдов — матрицы с нормализацией по строкам: CSV содержит доли 0–1, PNG — проценты;
 - `oof_classification_report.csv`, `oof_confusion_matrix.csv` / `.png`, `oof_confusion_matrix_normalized.csv` / `.png` — общие отчёт и матрицы по OOF-предсказаниям;
 - `oof_predictions.csv` — индекс и относительный путь патча, номер validation-фолда, истинный и предсказанный классы, вероятности всех классов;
-- `fold_1.pt` … `fold_5.pt` — веса последней эпохи, названия классов и параметры обучения.
+- `fold_1.pt` … `fold_5.pt` — лучшие веса по validation loss, `best_epoch`, метрики выбранной эпохи, названия классов и параметры обучения; поле `epochs` содержит заданный максимум эпох.
 
 ROC-AUC считается по вероятностям softmax в FP32. Если для класса нет положительных или отрицательных примеров, его ROC-AUC и macro ROC-AUC записываются как `nan`; разбиение с проверкой числа примеров в текущем скрипте обеспечивает присутствие всех классов в каждом validation-фолде. Kappa также записывается как `nan`, если истинные и предсказанные метки все совпадают с одним классом. PNG строятся без графического интерфейса и подходят для запуска на сервере.
 
