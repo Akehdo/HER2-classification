@@ -36,7 +36,13 @@ Patch-based-dataset/
 
 ## Сервер с одной H200
 
-На сервере нужен PyTorch с поддержкой CUDA. Если он ещё не установлен, выберите CUDA-сборку под драйвер сервера на [сайте PyTorch](https://pytorch.org/get-started/locally/), затем установите остальные зависимости из `requirements.txt`. Копировать Windows-папку `.venv` на Linux не нужно.
+На сервере с общим PyTorch создайте своё окружение с доступом к системным пакетам. Дополнительные зависимости устанавливаются в venv, PyTorch и torchvision используются общие. Копировать Windows-папку `.venv` на Linux не нужно.
+
+```bash
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python -m pip install "numpy>=1.26" "scikit-learn>=1.3" "Pillow>=10" "matplotlib>=3.8"
+```
 
 Проверка окружения:
 
@@ -47,8 +53,8 @@ python -c "import torch; assert torch.cuda.is_available(), 'CUDA is unavailable'
 Команды из корня проекта на сервере:
 
 ```bash
-python main.py --model resnet18 --weights IMAGENET1K_V1 --device cuda --precision bf16 --batch-size 256 --workers 8 --seed 42 --folds 5 --epochs 10
-python main.py --model resnet50 --weights IMAGENET1K_V1 --device cuda --precision bf16 --batch-size 256 --workers 8 --seed 42 --folds 5 --epochs 10
+python main.py --model resnet18 --device cuda --precision bf16 --batch-size 256 --workers 8
+python main.py --model resnet50 --device cuda --precision bf16 --batch-size 256 --workers 8
 ```
 
 `--device cuda` выдаёт понятную ошибку, если CUDA недоступна. В начале запуска печатаются название GPU и фактические настройки; после каждой эпохи — её время, включая validation.
@@ -66,7 +72,19 @@ python main.py --model resnet50 --weights IMAGENET1K_V1 --device cuda --precisio
 | resnet18 | IMAGENET1K_V1, DEFAULT |
 | resnet50 | IMAGENET1K_V1, IMAGENET1K_V2, DEFAULT |
 
-`DEFAULT` означает V1 для ResNet18 и V2 для ResNet50 ([документация torchvision](https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.resnet50.html)). Веса загружаются при первом запуске, затем берутся из кеша `<output>/_cache/`. `--weights none` создаёт модель со случайными весами для проверки кода.
+По умолчанию обе модели используют `IMAGENET1K_V1`. `DEFAULT` означает V1 для ResNet18 и V2 для ResNet50 ([документация torchvision](https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.resnet50.html)).
+
+Код автоматически выбирает файл для указанной модели и версии весов:
+
+| Модель | Версия | Файл |
+| --- | --- | --- |
+| resnet18 | IMAGENET1K_V1 / DEFAULT | `resnet18-f37072fd.pth` |
+| resnet50 | IMAGENET1K_V1 | `resnet50-0676ba61.pth` |
+| resnet50 | IMAGENET1K_V2 / DEFAULT | `resnet50-11ad3fa6.pth` |
+
+Сначала файл ищется в `/raid/models`, включая вложенные папки, затем в `<output>/_cache/checkpoints/`. Общие веса читаются напрямую: код не изменяет `/raid/models`, не копирует файлы и не требует симлинков. Другую общую папку можно указать через `--models-dir /путь/к/весам`. Если файл нигде не найден, torchvision загружает выбранные официальные веса в локальный кеш. В начале запуска печатаются фактическая версия и источник весов. Каждый фолд заново загружает эти исходные веса до замены классификатора.
+
+`--weights none` создаёт модель со случайными весами для проверки кода и пропускает поиск файлов.
 
 Без `--device` CUDA используется автоматически, если доступна; иначе — CPU с FP32. Для явного выбора есть `--device cuda` и `--device cpu`. Если CUDA GPU не поддерживает BF16, используйте `--precision fp32`.
 

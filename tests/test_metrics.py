@@ -97,7 +97,7 @@ class MetricsTests(unittest.TestCase):
                     "--weights", "none", "--device", "cpu", "--folds", "3", "--epochs", "2",
                     "--batch-size", "4", "--workers", "0"]
             # Проверяем весь CV и запись файлов без дорогого обучения ResNet.
-            def tiny_model(name, weights, num_classes):
+            def tiny_model(name, weights, num_classes, weights_file=None):
                 return nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(3, num_classes))
 
             with (mock.patch.object(sys, "argv", argv),

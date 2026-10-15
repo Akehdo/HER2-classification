@@ -6,6 +6,7 @@ import os
 import random
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import numpy as np
 import torch
@@ -45,8 +46,27 @@ def seed_worker(worker_id):
     np.random.seed(seed)
 
 
-def create_model(name, weights, num_classes):
-    model = MODELS[name][0](weights=weights)
+def find_weights_file(weights, models_dir, cache_dir):
+    """Ищем файл выбранных весов в общей папке, затем в локальном кеше."""
+    if weights is None:
+        return None
+    filename = Path(urlparse(weights.url).path).name
+    direct = models_dir / filename
+    if direct.is_file():
+        return direct
+    if models_dir.is_dir():
+        for path in models_dir.rglob(filename):
+            if path.is_file():
+                return path
+    cached = cache_dir / filename
+    return cached if cached.is_file() else None
+
+
+def create_model(name, weights, num_classes, weights_file=None):
+    model = MODELS[name][0](weights=None if weights_file is not None else weights)
+    if weights_file is not None:
+        # Загружаем исходную ImageNet-модель до замены её классификатора.
+        model.load_state_dict(torch.load(weights_file, map_location="cpu", weights_only=True))
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     return model
 
@@ -169,6 +189,8 @@ def main():
     parser.add_argument("--model", choices=MODELS, default="resnet18")
     parser.add_argument("--weights", default="IMAGENET1K_V1",
                         help="IMAGENET1K_V1, IMAGENET1K_V2 (ResNet50), DEFAULT или none")
+    parser.add_argument("--models-dir", type=Path, default=Path("/raid/models"),
+                        help="Общая папка ImageNet-весов; поиск также во вложенных папках")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--epochs", type=int, default=10)
@@ -223,13 +245,20 @@ def main():
     if len(train_data.classes) < 2 or np.bincount(targets).min() < args.folds:
         parser.error("Нужны хотя бы 2 класса и не меньше folds изображений в каждом классе")
 
-    torch.hub.set_dir(str(args.output / "_cache"))
+    cache_dir = args.output / "_cache"
+    torch.hub.set_dir(str(cache_dir))
+    weights_file = find_weights_file(weights, args.models_dir, cache_dir / "checkpoints")
     output = args.output / f"{args.model}_{args.weights}_seed{args.seed}"
     output.mkdir(parents=True, exist_ok=True)
     device_name = torch.cuda.get_device_name() if use_cuda else "CPU"
     print(f"Device: {device_name} | Classes: {train_data.class_to_idx}", flush=True)
     print(f"Precision: {'bf16' if use_bf16 else 'fp32'} | Batch: {args.batch_size} | "
           f"Workers: {args.workers} | Deterministic: {args.deterministic}", flush=True)
+    weights_source = (str(weights_file) if weights_file is not None else
+                      f"torchvision -> {cache_dir / 'checkpoints'}" if weights is not None else
+                      "random initialization")
+    print(f"Weights: {weights.name if weights is not None else 'none'} | "
+          f"Source: {weights_source}", flush=True)
     print(f"Images: {len(train_data)} | Results: {output}", flush=True)
 
     # Один seed даёт одинаковые разбиения для сравнения двух моделей.
@@ -260,7 +289,7 @@ def main():
                                     generator=torch.Generator().manual_seed(fold_seed))
             # Каждый фолд начинает с исходных весов, а не с предыдущего фолда.
             memory_format = torch.channels_last if use_cuda else torch.contiguous_format
-            model = create_model(args.model, weights, len(train_data.classes)).to(
+            model = create_model(args.model, weights, len(train_data.classes), weights_file).to(
                 device=device, memory_format=memory_format)
             optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, fused=use_cuda)
             criterion = nn.CrossEntropyLoss()
