@@ -23,7 +23,8 @@ class WeightsTests(unittest.TestCase):
         self.cache.mkdir(parents=True)
 
     def test_matches_model_and_weights_version_in_nested_shared_folder(self):
-        filenames = ["resnet18-f37072fd.pth", "resnet50-0676ba61.pth", "resnet50-11ad3fa6.pth"]
+        filenames = ["resnet18-f37072fd.pth", "resnet50-0676ba61.pth", "resnet50-11ad3fa6.pth",
+                     "efficientnet_b0_rwightman-7f5810bc.pth"]
         nested = self.shared / "torchvision" / "checkpoints"
         nested.mkdir(parents=True)
         for filename in filenames:
@@ -34,6 +35,8 @@ class WeightsTests(unittest.TestCase):
             ("resnet50", "IMAGENET1K_V1", filenames[1]),
             ("resnet50", "IMAGENET1K_V2", filenames[2]),
             ("resnet50", "DEFAULT", filenames[2]),
+            ("efficientnet_b0", "IMAGENET1K_V1", filenames[3]),
+            ("efficientnet_b0", "DEFAULT", filenames[3]),
         ]
         for model, version, filename in cases:
             with self.subTest(model=model, version=version):

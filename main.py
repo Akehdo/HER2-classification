@@ -1,4 +1,4 @@
-"""Простое дообучение ImageNet ResNet с кросс-валидацией по патчам."""
+"""Дообучение ImageNet-моделей с кросс-валидацией по патчам."""
 
 import argparse
 import csv
@@ -23,6 +23,7 @@ from torchvision import datasets, models, transforms
 MODELS = {
     "resnet18": (models.resnet18, models.ResNet18_Weights),
     "resnet50": (models.resnet50, models.ResNet50_Weights),
+    "efficientnet_b0": (models.efficientnet_b0, models.EfficientNet_B0_Weights),
 }
 METRIC_NAMES = ("loss", "accuracy", "macro_f1", "balanced_accuracy", "quadratic_kappa",
                 "roc_auc_ovr_macro")
@@ -90,7 +91,11 @@ def create_model(name, weights, num_classes, weights_file=None):
     if weights_file is not None:
         # Загружаем исходную ImageNet-модель до замены её классификатора.
         model.load_state_dict(torch.load(weights_file, map_location="cpu", weights_only=True))
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    if name == "efficientnet_b0":
+        # Сохраняем штатный Dropout перед последним линейным слоем.
+        model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
+    else:
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
     return model
 
 
@@ -261,7 +266,7 @@ def main():
         parser.error(f"Для {args.model} доступны: {', '.join(weights_enum.__members__)}, none")
 
     # Предобработка соответствует выбранным ImageNet-весам.
-    preprocess = (weights or models.ResNet18_Weights.IMAGENET1K_V1).transforms()
+    preprocess = (weights or weights_enum.IMAGENET1K_V1).transforms()
     train_transform = transforms.Compose([
         preprocess,
         # Отражаем уже уменьшенные патчи 224x224, а не исходные 1024x1024.
@@ -292,7 +297,7 @@ def main():
           f"patience={args.patience} (0 = disabled), min_delta={args.min_delta}", flush=True)
     print(f"Images: {len(train_data)} | Results: {output}", flush=True)
 
-    # Один seed даёт одинаковые разбиения для сравнения двух моделей.
+    # Один seed даёт одинаковые разбиения для сравнения моделей.
     cv = StratifiedKFold(n_splits=args.folds, shuffle=True, random_state=args.seed)
     scores = []
     fold_sizes = []

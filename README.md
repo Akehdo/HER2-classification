@@ -1,4 +1,4 @@
-# HER2: ResNet18 и ResNet50
+# HER2: ResNet18, ResNet50 и EfficientNet-B0
 
 Простой baseline на PyTorch: ImageNet-веса → замена последнего слоя → дообучение всей сети. Весь код обучения находится в `main.py`.
 
@@ -30,6 +30,7 @@ Patch-based-dataset/
 ```powershell
 .\.venv\Scripts\python.exe main.py --model resnet18 --seed 42
 .\.venv\Scripts\python.exe main.py --model resnet50 --seed 42
+.\.venv\Scripts\python.exe main.py --model efficientnet_b0 --seed 42
 ```
 
 Дополнительно можно менять `--batch-size`, `--workers`, `--lr 0.0001` и `--output runs`. Без явных настроек на CUDA выбираются batch size 256 и до 8 процессов загрузки, на CPU — batch size 16 и 0 процессов. Для небольшой GPU ноутбука задайте `--batch-size 8` или `16`.
@@ -57,13 +58,16 @@ python -c "import torch; assert torch.cuda.is_available(), 'CUDA is unavailable'
 ```bash
 python main.py --model resnet18 --device cuda --precision bf16 --batch-size 256 --workers 8
 python main.py --model resnet50 --device cuda --precision bf16 --batch-size 256 --workers 8
+python main.py --model efficientnet_b0 --device cuda --precision bf16 --batch-size 256 --workers 8
 ```
 
 `--device cuda` выдаёт понятную ошибку, если CUDA недоступна. В начале запуска печатаются название GPU и фактические настройки; после каждой эпохи — её время, включая validation.
 
 Для CUDA включены BF16 mixed precision (при `--precision bf16`), `channels_last`, fused Adam, подбор алгоритмов cuDNN и TF32 для оставшихся FP32-матричных операций. Загрузка данных использует отдельные процессы, pinned memory, предварительную загрузку и persistent workers. Метрики переносятся на CPU один раз за эпоху. Это стандартные приёмы из [руководства PyTorch по ускорению](https://docs.pytorch.org/tutorials/recipes/recipes/tuning_guide.html).
 
-256 — начальное значение batch size для H200, а не результат замера на вашем сервере. Если сервер выделяет меньше 8 CPU-ядер, уменьшите `--workers`. Храните распакованные изображения на локальном SSD сервера: скорость декодирования PNG и диска тоже влияет на время обучения. Для сравнения моделей используйте одинаковые batch size, seed и число эпох; learning rate автоматически не меняется. При изменении batch size качество стоит сравнивать по CV.
+256 — начальное значение batch size для H200, а не результат замера на вашем сервере. Если сервер выделяет меньше 8 CPU-ядер, уменьшите `--workers`. Храните распакованные изображения на локальном SSD сервера: скорость декодирования PNG и диска тоже влияет на время обучения. Для сравнения моделей используйте одинаковые batch size, seed, максимум эпох и настройки early stopping; learning rate автоматически не меняется. При изменении batch size качество стоит сравнивать по CV.
+
+Третья архитектура — [EfficientNet-B0](https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.efficientnet_b0.html) с весами ImageNet-1K. В ней заменяется последний линейный слой `classifier`, а штатный Dropout сохраняется. Предобработка берётся из её весов: resize 256 с bicubic-интерполяцией, crop 224 × 224 и ImageNet-нормализация. Для всех трёх моделей используются одинаковые разбиения по seed, метрики и early stopping.
 
 Для строгой воспроизводимости добавьте `--deterministic`: это отключает cuDNN benchmark и включает детерминированные алгоритмы. Быстрый режим по умолчанию сохраняет seed для разбиения, инициализации, перемешивания и аугментаций, но допускает небольшие различия CUDA-результатов между повторными запусками ([документация PyTorch](https://docs.pytorch.org/docs/stable/notes/randomness.html)). Для FP32 задайте `--precision fp32`.
 
@@ -73,8 +77,9 @@ python main.py --model resnet50 --device cuda --precision bf16 --batch-size 256 
 | --- | --- |
 | resnet18 | IMAGENET1K_V1, DEFAULT |
 | resnet50 | IMAGENET1K_V1, IMAGENET1K_V2, DEFAULT |
+| efficientnet_b0 | IMAGENET1K_V1, DEFAULT |
 
-По умолчанию обе модели используют `IMAGENET1K_V1`. `DEFAULT` означает V1 для ResNet18 и V2 для ResNet50 ([документация torchvision](https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.resnet50.html)).
+По умолчанию все три модели используют `IMAGENET1K_V1`. `DEFAULT` означает V1 для ResNet18 и EfficientNet-B0, V2 для ResNet50 ([документация torchvision](https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.resnet50.html)).
 
 Код автоматически выбирает файл для указанной модели и версии весов:
 
@@ -83,6 +88,7 @@ python main.py --model resnet50 --device cuda --precision bf16 --batch-size 256 
 | resnet18 | IMAGENET1K_V1 / DEFAULT | `resnet18-f37072fd.pth` |
 | resnet50 | IMAGENET1K_V1 | `resnet50-0676ba61.pth` |
 | resnet50 | IMAGENET1K_V2 / DEFAULT | `resnet50-11ad3fa6.pth` |
+| efficientnet_b0 | IMAGENET1K_V1 / DEFAULT | `efficientnet_b0_rwightman-7f5810bc.pth` |
 
 Сначала файл ищется в `/raid/models`, включая вложенные папки, затем в `<output>/_cache/checkpoints/`. Общие веса читаются напрямую: код не изменяет `/raid/models`, не копирует файлы и не требует симлинков. Другую общую папку можно указать через `--models-dir /путь/к/весам`. Если файл нигде не найден, torchvision загружает выбранные официальные веса в локальный кеш. В начале запуска печатаются фактическая версия и источник весов. Каждый фолд заново загружает эти исходные веса до замены классификатора.
 
@@ -95,7 +101,7 @@ python main.py --model resnet50 --device cuda --precision bf16 --batch-size 256 
 - `StratifiedKFold` делит **только train** на K фолдов с сохранением пропорций классов. Готовый test не участвует в обучении и выборе модели.
 - Каждый фолд начинает обучение заново с выбранных ImageNet-весов. Все слои обучаются.
 - В train используются случайные отражения после уменьшения изображения; в validation — только предобработка выбранных весов, включая ImageNet-нормализацию и crop 224 × 224.
-- Одинаковые `--seed`, данные и число фолдов дают одинаковые разбиения для обеих моделей. Seed также задаёт инициализацию, перемешивание и аугментации, включая процессы загрузки. Для строгой воспроизводимости используйте `--deterministic`; держите одинаковыми также workers, batch size, устройство и версии библиотек.
+- Одинаковые `--seed`, данные и число фолдов дают одинаковые разбиения для всех моделей. Seed также задаёт инициализацию, перемешивание и аугментации, включая процессы загрузки. Для строгой воспроизводимости используйте `--deterministic`; держите одинаковыми также workers, batch size, устройство и версии библиотек.
 - После каждой эпохи на validation считаются loss, accuracy, macro F1, balanced accuracy, quadratic weighted kappa и macro ROC-AUC one-vs-rest. При снижении validation loss сразу сохраняются лучшие веса. Итог CV — среднее и стандартное отклонение метрик **лучшей эпохи по validation loss** каждого фолда. Счётчик early stopping начинает отсчёт заново в каждом фолде.
 - Balanced accuracy — среднее recall по классам. Quadratic weighted kappa учитывает расстояние между классами в порядке `ImageFolder`: для нашего датасета `class_0`, `class_1+`, `class_2+`, `class_3+`. Если использовать другие классы, этот порядок должен соответствовать их порядковой шкале.
 - Дополнительно собираются OOF (out-of-fold) предсказания лучшей эпохи каждого фолда. Патчи validation не участвуют в обновлении весов, но их метки используются для выбора эпохи и early stopping. По этим предсказаниям строятся общий отчёт и матрицы ошибок. OOF-метрики вычисляются по всем предсказаниям вместе и могут отличаться от среднего по фолдам; OOF loss — среднее fold loss с весами по размерам фолдов. Для независимой итоговой оценки нужен отдельный test после фиксации настроек.
