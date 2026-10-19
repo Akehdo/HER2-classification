@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b1526">
+  <meta name="description" content="Классификация патчей HER2.">
+  <title>HER2 — Patch Lab</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 13 3M5 15a8 8 0 0 0 13 3"/></symbol>
+  </svg>
+
+  <header class="topbar">
+    <div class="header-content">
+      <a class="brand" href="/" aria-label="HER2 Patch Lab — главная">
+        <span class="brand-symbol" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+        <span class="brand-word">HER2<span class="brand-sub">PATCH LAB</span></span>
+      </a>
+      <span class="model-status" id="model-status" role="status">Проверка модели…</span>
+    </div>
+  </header>
+
+  <main id="workspace">
+    <h1>Анализ патчей</h1>
+    <div class="model-banner" id="model-banner" role="status" hidden>
+      <p id="banner-message"></p>
+      <button class="icon-button" id="refresh-health" aria-label="Проверить подключение"><svg><use href="#i-refresh"/></svg></button>
+    </div>
+
+    <section class="workbench" aria-label="Загрузка и результат анализа">
+      <div class="input-panel">
+        <div class="panel-heading"><h2>Патчи</h2><span class="panel-tag" id="input-tag" hidden></span></div>
+        <div class="image-stage" id="drop-zone">
+          <div class="upload-empty" id="upload-empty">
+            <svg class="upload-symbol"><use href="#i-upload"/></svg>
+            <h3>Перетащите патчи</h3>
+            <button class="button button-light" id="choose-files"><svg><use href="#i-plus"/></svg>Выбрать файлы</button>
+            <span class="upload-formats">PNG, JPG, TIFF, WebP · до 10 МБ · до 16 файлов</span>
+          </div>
+          <img id="patch-preview" class="patch-preview" alt="Выбранный патч" hidden>
+          <div class="unsupported-preview" id="unsupported-preview" hidden><svg><use href="#i-image"/></svg><span>Предпросмотр недоступен</span></div>
+          <button class="expand-button icon-button" id="expand-preview" aria-label="Развернуть изображение" hidden><svg><use href="#i-expand"/></svg></button>
+          <div class="drop-overlay" id="drop-overlay" hidden><svg><use href="#i-upload"/></svg><strong>Отпустите файлы</strong></div>
+          <div class="processing-overlay" id="processing-overlay" hidden><span class="spinner"></span><strong>Анализируем…</strong></div>
+          <span class="image-dimensions" id="image-dimensions" hidden></span>
+        </div>
+        <input type="file" id="file-input" accept=".png,.jpg,.jpeg,.tif,.tiff,.webp" multiple hidden>
+        <div class="file-strip" id="file-strip" hidden>
+          <div class="file-identity"><svg><use href="#i-image"/></svg><div><strong id="file-name"></strong><span id="file-meta"></span></div></div>
+          <button class="icon-button" id="remove-file" aria-label="Удалить выбранный патч" hidden><svg><use href="#i-close"/></svg></button>
+        </div>
+        <div class="queue" id="queue" aria-label="Загруженные патчи" hidden></div>
+        <div class="input-actions">
+          <button class="button button-add" id="add-files" hidden><svg><use href="#i-plus"/></svg>Добавить</button>
+          <button class="button button-primary" id="analyze-button" disabled><span id="analyze-label">Анализировать</span><svg><use href="#i-arrow"/></svg></button>
+        </div>
+      </div>
+
+      <div class="result-panel" id="result-panel" aria-busy="false">
+        <div class="panel-heading"><h2>Результат</h2><span class="result-indicator" id="result-indicator">Нет данных</span></div>
+        <div class="prediction-summary">
+          <div class="prediction-caption">Класс HER2</div>
+          <div class="prediction-value"><strong id="prediction-class">—</strong><div class="prediction-check" id="prediction-check" hidden><svg><use href="#i-check"/></svg></div></div>
+          <p id="result-description" hidden></p>
+        </div>
+        <h3 class="distribution-heading">Вероятности</h3>
+        <div class="probability-list" id="probability-list"></div>
+        <div class="result-timing" id="result-timing" hidden><span>Время анализа</span><span id="inference-time"></span></div>
+        <button class="button button-export" id="export-button" disabled><svg><use href="#i-download"/></svg>Скачать CSV<span id="export-count"></span></button>
+      </div>
+    </section>
+
+    <div class="notice" id="notice" role="alert" hidden><span id="notice-text"></span><button class="icon-button" id="dismiss-notice" aria-label="Закрыть сообщение"><svg><use href="#i-close"/></svg></button></div>
+    <div class="sr-only" id="announcer" aria-live="polite"></div>
+  </main>
+
+  <dialog id="image-dialog" class="image-dialog" aria-label="Просмотр патча"><button class="icon-button" data-close-dialog aria-label="Закрыть изображение"><svg><use href="#i-close"/></svg></button><img id="full-preview" alt="Увеличенный выбранный патч"></dialog>
+</body>
+</html>
