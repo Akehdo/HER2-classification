@@ -3,5 +3,4 @@
 __pycache__/
 data/
 Patch-based-dataset/
-runs/
 models/

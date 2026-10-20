@@ -1,0 +1,5 @@
+true / predicted,class_0,class_1+,class_2+,class_3+
+class_0,585,21,0,0
+class_1+,28,387,14,1
+class_2+,1,12,165,3
+class_3+,0,0,2,540
